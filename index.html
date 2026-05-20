@@ -284,7 +284,7 @@
         let player; // YouTube Iframe Player
         let isModelLoaded = false;
         let isWebcamActive = false;
-        let isPlaying = false; // 게임 시작 여부
+        let isPlaying = false; // 게임 시작 여부 (오직 득점 시스템 구동에만 쓰임)
         let isPredicting = false; // 연산 동기 락
         let animationFrameId = null;
 
@@ -416,7 +416,7 @@
             const metadataURL = TEACHABLE_MACHINE_URL + "metadata.json";
 
             try {
-                // ⭐ 포즈 라이브러리(tmPose)를 통해 신체 관절 정보에 최적화된 형태로 모델을 초기화
+                // 포즈 라이브러리(tmPose)를 통해 신체 관절 정보에 최적화된 형태로 모델을 초기화
                 model = await tmPose.load(modelURL, metadataURL);
                 maxPredictions = model.getTotalClasses();
                 isModelLoaded = true;
@@ -439,7 +439,7 @@
             }
         }
 
-        // ⭐ tmPose.Webcam 구조를 활용하여 관절 뼈대까지 실시간 출력하는 포즈 트래커 가동
+        // tmPose.Webcam 구조를 활용하여 관절 뼈대까지 실시간 출력하는 포즈 트래커 가동
         async function setupTMPoseWebcam() {
             try {
                 if (isWebcamActive) return;
@@ -483,195 +483,5 @@
                 // 비디오 프레임 업데이트
                 webcam.update();
 
-                // 사용자가 게임 실행 중이고, 이전 연산이 종료되었다면 비동기로 포즈 추론 가동
-                if (isPlaying && isModelLoaded && !isPredicting) {
-                    isPredicting = true;
-                    predict().then(() => {
-                        isPredicting = false;
-                    }).catch(e => {
-                        console.error("AI 예측 분석 실패:", e);
-                        isPredicting = false;
-                    });
-                }
-            } catch (err) {
-                console.error("웹캠 렌더 갱신 오류:", err);
-            }
-
-            // GPU 프레임 제어 루프 예약
-            requestAnimationFrame(webcamRenderLoop);
-        }
-
-        // 모든 로딩 조건 충족 시 시작 버튼 활성화
-        function checkReadyState() {
-            if (isModelLoaded && player && typeof player.playVideo === 'function') {
-                btnStart.removeAttribute("disabled");
-                btnStart.classList.remove("opacity-50");
-            }
-        }
-
-        // 3. UI 및 유튜브 싱크 루프 (이원화 완료)
-        function uiSyncLoop() {
-            if (!isPlaying) return;
-            // 유튜브 재생 상황에 맞는 미션 타임라인 분석
-            monitorTimeline();
-            animationFrameId = requestAnimationFrame(uiSyncLoop);
-        }
-
-        // 유튜브 재생 시간에 매칭되는 올바른 미션 정의
-        function monitorTimeline() {
-            if (!player || typeof player.getCurrentTime !== 'function') return;
-
-            const currentTime = player.getCurrentTime();
-            const currentMission = TIMELINE.find(item => currentTime >= item.start && currentTime < item.end);
-
-            if (currentMission) {
-                if (currentTargetAction !== currentMission.action) {
-                    currentTargetAction = currentMission.action;
-                    
-                    // 미션 카드 UI 업데이트
-                    targetActionEl.textContent = currentMission.desc;
-                    missionIconContainer.innerHTML = `<i class="fa-solid ${currentMission.icon} text-purple-400 text-2xl"></i>`;
-                    
-                    // 카드 보더 색상 변경
-                    missionCard.className = "bg-gradient-to-r from-slate-900 to-indigo-950/40 border-2 border-purple-500 rounded-xl p-4 flex items-center justify-between transition-all duration-300 neon-border";
-                }
-            } else {
-                currentTargetAction = "NONE";
-                targetActionEl.textContent = "대기 및 준비";
-                missionIconContainer.innerHTML = `<i class="fa-solid fa-clock text-slate-400 text-2xl"></i>`;
-                missionCard.className = "bg-gradient-to-r from-slate-900 to-indigo-950/40 border-2 border-slate-700 rounded-xl p-4 flex items-center justify-between transition-all duration-300";
-            }
-        }
-
-        // 포즈 모델을 통한 관절 좌표 추출 및 매칭 판단
-        async function predict() {
-            // 1. 관절 키포인트 추출 (포즈에 맞추어 연산 분리)
-            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
-            
-            // 2. 관절 좌표를 기반으로 커스텀 분류 결과 획득 (전치 텐서 오류 해결의 핵심)
-            const prediction = await model.predict(posenetOutput);
-            
-            let targetProb = 0;
-
-            // 실시간 뼈대 그리기 연동 (AI 동작을 인식하고 있는 모습 표시)
-            if (pose && webcam.canvas) {
-                const ctx = webcam.canvas.getContext("2d");
-                // 키포인트 및 관절 골격선 그리기 추가
-                const minPartConfidence = 0.5;
-                tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
-                tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
-            }
-
-            for (let i = 0; i < maxPredictions; i++) {
-                const classPrediction = prediction[i].className;
-                const probability = prediction[i].probability;
-                const probPercent = Math.round(probability * 100);
-
-                // UI 실시간 클래스별 확률 미터기 업데이트
-                const formattedClass = classPrediction.replace(" ", "_");
-                const accEl = document.getElementById(`acc-${formattedClass}`);
-                const barEl = document.getElementById(`bar-${formattedClass}`);
-
-                if (accEl && barEl) {
-                    accEl.textContent = `${probPercent}%`;
-                    barEl.style.width = `${probPercent}%`;
-                    
-                    if (probPercent > 50) {
-                        barEl.className = "bg-purple-500 h-full rounded-full transition-all duration-150";
-                    } else {
-                        barEl.className = "bg-slate-600 h-full rounded-full transition-all duration-150";
-                    }
-                }
-
-                // 현재 타겟 동작과 맞는지 비교 계산
-                if (classPrediction === currentTargetAction) {
-                    targetProb = probability;
-                }
-            }
-
-            // 타겟 정확도 표시
-            const targetPercent = Math.round(targetProb * 100);
-            targetAccuracyEl.textContent = `${targetPercent}%`;
-
-            if (targetPercent >= 85) {
-                targetAccuracyEl.className = "text-2xl font-black text-green-400 scale-110 transform transition-transform";
-                evaluateScore();
-            } else {
-                targetAccuracyEl.className = "text-2xl font-bold text-slate-400";
-            }
-        }
-
-        // 조건 부합 시 점수 누적 처리
-        function evaluateScore() {
-            const now = Date.now();
-            if (now - lastSuccessfulTime > 800) {
-                score += 100 + (combo * 10);
-                combo += 1;
-                lastSuccessfulTime = now;
-
-                // 스탯 UI 반영
-                scoreDisplay.textContent = String(score).padStart(4, '0');
-                comboDisplay.textContent = combo;
-
-                // 점수 판정 오버레이 이펙트 활성화
-                successOverlay.style.opacity = "1";
-                successOverlay.querySelector("div").style.transform = "scale(1)";
-                missionCard.classList.add("success-pulse");
-
-                setTimeout(() => {
-                    successOverlay.style.opacity = "0";
-                    successOverlay.querySelector("div").style.transform = "scale(0.75)";
-                    missionCard.classList.remove("success-pulse");
-                }, 400);
-            }
-        }
-
-        // 4. 이벤트 핸들러 바인딩 및 제어
-        btnStart.addEventListener("click", async () => {
-            if (!isWebcamActive) {
-                await setupTMPoseWebcam();
-            }
-
-            if (isWebcamActive && player) {
-                isPlaying = true; // 게임 가동 시작
-                player.seekTo(0);
-                player.playVideo();
-                
-                if (animationFrameId) cancelAnimationFrame(animationFrameId);
-                uiSyncLoop(); // UI 루프 시작
-
-                btnStart.setAttribute("disabled", "true");
-                btnStart.classList.add("opacity-50");
-            }
-        });
-
-        btnReset.addEventListener("click", () => {
-            isPlaying = false;
-            if (player) {
-                player.stopVideo();
-                player.seekTo(0);
-            }
-            if (animationFrameId) {
-                cancelAnimationFrame(animationFrameId);
-            }
-            score = 0;
-            combo = 0;
-            scoreDisplay.textContent = "0000";
-            comboDisplay.textContent = "0";
-            targetAccuracyEl.textContent = "0%";
-            currentTargetAction = "REST";
-            targetActionEl.textContent = "WAITING...";
-            missionIconContainer.innerHTML = `<i class="fa-solid fa-hourglass-start"></i>`;
-            missionCard.className = "bg-gradient-to-r from-slate-900 to-indigo-950/40 border-2 border-slate-700 rounded-xl p-4 flex items-center justify-between transition-all duration-300";
-
-            btnStart.removeAttribute("disabled");
-            btnStart.classList.remove("opacity-50");
-        });
-
-        // 초기 실행 흐름 시작
-        window.onload = () => {
-            initTeachableMachine();
-        };
-    </script>
-</body>
-</html>
+                // ⭐ [핵심 수정]: 게임 중 여부(isPlaying)와 상관없이 카메라만 켜지면 무조건 실시간 관절 분석 및 확률 갱신!
+                if (isModelLoaded && !isPredicting) {
