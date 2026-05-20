@@ -1,4 +1,4 @@
-!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -88,7 +88,7 @@
                     </button>
                 </div>
                 <p class="text-[11px] text-slate-400">
-                    * 유튜브 에러(153)는 브라우저 보안 샌드박스로 인해 도메인 비매칭 시 발생할 수 있습니다. 위 입력창에 재생하고 싶은 주소를 다시 입력한 후 '영상 변경 적용'을 클릭해 보세요.
+                    * 유튜브 에러(153)는 브라우저 보안 샌드박스로 인해 발생할 수 있습니다. 정상 재생이 불가능할 경우 다른 단독 유튜브 주소를 입력해 보세요.
                 </p>
             </div>
 
@@ -140,9 +140,9 @@
             <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-4 flex flex-col gap-4 shadow-xl backdrop-blur">
                 <div class="flex justify-between items-center">
                     <span class="font-semibold text-sm flex items-center gap-2">
-                        <i class="fa-solid fa-camera text-purple-400"></i> AI 카메라 (나의 모습)
+                        <i class="fa-solid fa-camera text-purple-400"></i> AI 카메라 (실시간 감지)
                     </span>
-                    <span id="webcam-status" class="text-xs bg-red-950 text-red-400 border border-red-900/50 px-2 py-0.5 rounded-md font-medium">
+                    <span id="webcam-status" class="text-xs bg-red-950 text-red-400 border border-red-900/50 px-2 py-0.5 rounded-md font-medium animate-pulse">
                         OFFLINE
                     </span>
                 </div>
@@ -152,13 +152,16 @@
                     <div id="webcam-container" class="w-full h-full transform -scale-x-100"></div>
                     
                     <!-- 웹캠 미활성 안내 문구 -->
-                    <div id="webcam-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-center p-4 gap-3 bg-slate-950">
+                    <div id="webcam-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-center p-4 gap-4 bg-slate-950 z-20">
                         <i class="fa-solid fa-video-slash text-4xl text-slate-600"></i>
-                        <p class="text-xs text-slate-400">모델 로딩 완료 후 브라우저의 카메라 권한을 허용해 주세요.</p>
+                        <p class="text-xs text-slate-400">카메라 권한을 수락하면 여기에 사용자의 모습이 나타납니다.</p>
+                        <button id="btn-enable-cam" class="bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold py-2 px-4 rounded-xl transition-all shadow-md">
+                            카메라 허용 및 시작
+                        </button>
                     </div>
 
                     <!-- 실시간 판정 성공 시 시각적 플래시 효과 -->
-                    <div id="success-overlay" class="absolute inset-0 bg-green-500/20 opacity-0 pointer-events-none transition-opacity duration-150 flex items-center justify-center">
+                    <div id="success-overlay" class="absolute inset-0 bg-green-500/20 opacity-0 pointer-events-none transition-opacity duration-150 flex items-center justify-center z-10">
                         <div class="bg-green-500 text-white rounded-full p-4 shadow-lg scale-75 transform transition-transform">
                             <i class="fa-solid fa-check text-4xl"></i>
                         </div>
@@ -279,14 +282,13 @@
         let player; // YouTube Iframe Player
         let isModelLoaded = false;
         let isWebcamActive = false;
-        let isPlaying = false; // 게임 활성화 여부
-        let isPredicting = false; // 예측 연산 중복 잠금 플래그 (카메라 멈춤 방지 핵심)
-        let animationFrameId = null;
+        let isPlaying = false; // 게임 시작 여부
+        let isPredicting = false; // 연산 동기 락
 
         // 게임 스탯
         let score = 0;
         let combo = 0;
-        let lastSuccessfulTime = 0; // 점수 획득 간 쿨타임 조절용
+        let lastSuccessfulTime = 0; 
         let currentTargetAction = "REST";
 
         // DOM 요소 캐싱
@@ -303,6 +305,7 @@
         const comboDisplay = document.getElementById("combo-display");
         const successOverlay = document.getElementById("success-overlay");
         const webcamPlaceholder = document.getElementById("webcam-placeholder");
+        const btnEnableCam = document.getElementById("btn-enable-cam");
         const inputVideoUrl = document.getElementById("input-video-url");
         const btnUpdateVideo = document.getElementById("btn-update-video");
 
@@ -363,7 +366,6 @@
                 },
                 events: {
                     'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange,
                     'onError': onPlayerError
                 }
             });
@@ -375,10 +377,6 @@
                 videoPlaceholder.style.display = "none";
             }, 500);
             checkReadyState();
-        }
-
-        function onPlayerStateChange(event) {
-            // 재생 중에 연동 최적화
         }
 
         function onPlayerError(event) {
@@ -425,6 +423,9 @@
                     <span class="text-xs text-green-400 font-semibold">AI 모델 로드 완료</span>
                 `;
                 checkReadyState();
+
+                // ⚡ 모델 로드 완료 시 사용자 권한 요청 및 실시간 카메라 출력 즉시 시작!
+                setupWebcam();
             } catch (error) {
                 console.error("모델 로딩 실패", error);
                 gameStatus.innerHTML = `
@@ -438,6 +439,9 @@
         // 웹캠 활성화 및 갱신 전용 독립 루프 (카메라 버벅임 전면 제거)
         async function setupWebcam() {
             try {
+                // 이미 활성화되어 있다면 중복 초기화 방지
+                if (isWebcamActive) return;
+
                 const flip = true; 
                 webcam = new tmImage.Webcam(280, 210, flip); // 가로, 세로, 반전
                 await webcam.setup(); // 카메라 권한 요청
@@ -453,39 +457,45 @@
                 webcamStatus.className = "text-xs bg-green-950 text-green-400 border border-green-900/50 px-2 py-0.5 rounded-md font-medium";
                 isWebcamActive = true;
 
-                // 웹캠 고속 프레임 업데이트 루프를 즉시 독립 가동
+                // 60FPS 급 고성능 카메라 단독 렌더링 루프 가동
                 webcamRenderLoop();
+                
+                // AI 예측만을 별도 스레드로 분리 실행
+                startPredictionScheduler();
             } catch (err) {
                 console.error("카메라 접근 불가", err);
                 showModal("권한 오류", "카메라(웹캠) 접근 권한이 거부되었거나 사용할 수 있는 카메라 장치가 없습니다. 권한 승인 후 새로고침해 주세요.", true);
             }
         }
 
-        // 독립 웹캠 렌더링 루프 (초당 약 30회, 부드럽게 갱신)
-        async function webcamRenderLoop() {
+        // 수동 카메라 켜기 바인딩
+        btnEnableCam.addEventListener("click", setupWebcam);
+
+        // 🎥 물리적으로 완전히 독립된 웹캠 비주얼 렌더링 루프 (초당 60회 갱신 지향)
+        function webcamRenderLoop() {
             if (!isWebcamActive) return;
 
-            try {
-                // 어떤 예측 연산 상태여도 웹캠 프레임 갱신(update)은 항상 매끄럽게 처리
-                webcam.update();
+            // 오직 화면 갱신(update) 연산만 집중 처리하여 어떠한 상황에서도 멈추지 않는 프레임 보장
+            webcam.update();
+            requestAnimationFrame(webcamRenderLoop);
+        }
 
-                // 예측 중이 아니고, 게임이 실행 상태일 때만 예측 연산 스레드 실행 (중복 병목 방지)
-                if (isPlaying && isModelLoaded && !isPredicting) {
+        // 🧠 AI 연산 스케줄러: 무거운 TensorFlow 연산이 화면 주사율을 헤치지 않도록 완전히 비동기 지연 실행
+        function startPredictionScheduler() {
+            async function loop() {
+                if (isWebcamActive && isModelLoaded && !isPredicting) {
                     isPredicting = true;
-                    // 비동기 처리로 웹캠 드로우 루프를 막지 않게 분리 호출
-                    predict().then(() => {
-                        isPredicting = false;
-                    }).catch(err => {
-                        console.error(err);
-                        isPredicting = false;
-                    });
+                    try {
+                        await predict();
+                    } catch (e) {
+                        console.error("예측 에러:", e);
+                    }
+                    isPredicting = false;
                 }
-            } catch (e) {
-                console.error("웹캠 갱신 오류:", e);
+                // 초당 약 10회의 딥러닝 연산으로 모션 감지 (버벅임 극복의 핵심 포인트)
+                setTimeout(loop, 100); 
             }
-
-            // 스케줄을 브라우저 렌더링에 양보하여 CPU 멈춤을 원천 해결
-            setTimeout(webcamRenderLoop, 33); // 약 30 FPS 유지
+            loop();
         }
 
         // 모든 로딩 조건 충족 시 시작 버튼 활성화
@@ -509,7 +519,6 @@
             if (!player || typeof player.getCurrentTime !== 'function') return;
 
             const currentTime = player.getCurrentTime();
-            // 현재 시간에 부합하는 타임라인 정의 탐색
             const currentMission = TIMELINE.find(item => currentTime >= item.start && currentTime < item.end);
 
             if (currentMission) {
